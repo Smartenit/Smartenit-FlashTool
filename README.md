@@ -1,7 +1,5 @@
 # ESP Flash Tool
 
-![ESP Flash Tool Screenshot](Captura%20de%20pantalla%202025-03-29%20191744.png)
-
 ## Overview
 
 The ESP Flash Tool is a user-friendly application designed to simplify the process of flashing firmware to ESP32/ESP8266 microcontrollers. It provides a graphical interface for selecting firmware files, configuring flash parameters, and monitoring serial output.
