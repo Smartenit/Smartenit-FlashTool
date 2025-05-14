@@ -252,32 +252,56 @@ class ESPFlashTool:
             messagebox.showwarning("No Ports", "No serial ports detected")
                 
     def set_csv_file_path(self):
-        """Ask the user for the CSV file path."""
-        # Ask the user if they want to select an existing file or create a new one
-        response = messagebox.askyesno(
-            "Select CSV File",
-            "Do you want to select an existing CSV file? (Select 'No' to create a new one)."
-        )
-
-        if response:  # If the user wants to select an existing file
-            file_path = filedialog.askopenfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv")],
-                title="Select an existing CSV file"
-            )
-        else:  # If the user wants to create a new file
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv")],
-                title="Create or select a CSV file"
-            )
-
-        if file_path:
-            self.csv_file_path = file_path
+        """Ask the user for the CSV file path with Linux permissions handling"""
+        default_dir = os.path.expanduser("~/Documents/ESPFlashTool_Data")
+        
+        try:
+            os.makedirs(default_dir, exist_ok=True)
+            os.chmod(default_dir, 0o755)
             
-        else:
-            messagebox.showwarning("Warning", "No path selected. Data will not be saved automatically.")
-
+            response = messagebox.askyesno(
+                "CSV File Operation",
+                "Do you want to open an existing CSV file?\n(Select 'No' to create a new one)",
+                parent=self.root
+            )
+            
+            if response:
+                file_path = filedialog.askopenfilename(
+                    initialdir=default_dir,
+                    title="Select CSV File",
+                    filetypes=[("CSV Files", "*.csv")],
+                    defaultextension=".csv"
+                )
+            else:
+                file_path = filedialog.asksaveasfilename(
+                    initialdir=default_dir,
+                    title="Create New CSV File",
+                    filetypes=[("CSV Files", "*.csv")],
+                    defaultextension=".csv"
+                )
+            
+            if file_path:
+                if not os.access(os.path.dirname(file_path), os.W_OK):
+                    raise PermissionError(f"No write access to: {os.path.dirname(file_path)}")
+                
+                self.csv_file_path = file_path
+                
+                if hasattr(self, 'monitor_output'):  # <-- Protección clave
+                    self.monitor_output.insert(tk.END, f"\nCSV path set to: {file_path}\n")
+                
+                if not os.path.exists(file_path):
+                    open(file_path, 'a').close()
+                    os.chmod(file_path, 0o660)
+                    
+            else:
+                messagebox.showwarning("Operation Cancelled", "No file selected.")
+                self.csv_file_path = None
+                
+        except PermissionError as pe:
+            messagebox.showerror("Permission Denied", f"Cannot access location:\n{str(pe)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to set CSV path:\n{str(e)}")
+            
     def update_file_listbox(self):
         """Update the listbox with current flash files and offsets in a formatted way."""
         self.file_listbox.delete(0, tk.END)
@@ -491,7 +515,7 @@ class ESPFlashTool:
         )
         
     def save_json_to_csv(self):
-        """Save JSON data to a CSV file at the specified path."""
+        """Save JSON data to a CSV file with Linux permission handling"""
         if not hasattr(self, 'json_data') or not self.json_data:
             messagebox.showwarning("Warning", "No JSON data to save.")
             return
@@ -501,52 +525,67 @@ class ESPFlashTool:
             return
 
         try:
-            # Convert JSON to a format suitable for CSV
+            # Validar formato JSON
             if isinstance(self.json_data, dict):
                 data_to_save = [self.json_data]
             elif isinstance(self.json_data, list):
                 data_to_save = self.json_data
             else:
-                raise ValueError("Unsupported JSON format")
+                raise ValueError("Formato JSON no soportado")
 
-            # Get the keys from the JSON to use as CSV headers
-            headers = data_to_save[0].keys()
+            # Obtener headers del primer registro
+            headers = list(data_to_save[0].keys())
+            hw_id = data_to_save[0].get("hw_id")
 
-            # Read the existing CSV file (if it exists)
             existing_data = []
-            if os.path.exists(self.csv_file_path):
-                with open(self.csv_file_path, mode='r', newline='', encoding='utf-8') as csv_file:
-                    reader = csv.DictReader(csv_file)
-                    existing_data = list(reader)
+            file_exists = os.path.exists(self.csv_file_path)
 
-            # Search for the hw_id in the existing data
-            hw_id = self.json_data.get("hw_id")  # Assume the JSON has an "hw_id" field
+            # Leer datos existentes si el archivo existe
+            if file_exists:
+                try:
+                    with open(self.csv_file_path, mode='r', newline='', encoding='utf-8') as csv_file:
+                        reader = csv.DictReader(csv_file)
+                        existing_data = list(reader)
+                except Exception as read_error:
+                    messagebox.showerror("Read Error", f"Error reading CSV: {read_error}")
+                    return
+
+            # Actualizar registro existente
             updated = False
-
             for row in existing_data:
                 if row.get("hw_id") == hw_id:
-                    # Update the existing row with the new data
-                    row.update(self.json_data)
+                    row.update(data_to_save[0])
                     updated = True
                     break
 
+            # Añadir nuevo registro si no existe
             if not updated:
-                # If the hw_id was not found, add a new row
-                existing_data.append(self.json_data)
+                existing_data.append(data_to_save[0])
 
-            # Write the updated data to the CSV file
+            # Escribir archivo completo
             with open(self.csv_file_path, mode='w', newline='', encoding='utf-8') as csv_file:
                 writer = csv.DictWriter(csv_file, fieldnames=headers)
                 writer.writeheader()
                 writer.writerows(existing_data)
+                
+                # Establecer permisos Linux (rw-rw----)
+                os.chmod(self.csv_file_path, 0o660)
 
-            print(f"Data saved successfully to {self.csv_file_path}")
-            gui_msg = (f"Data saved successfully!\n\n"
-                   f"File: {os.path.basename(self.csv_file_path)}\n"
-                   f"Location: {os.path.dirname(self.csv_file_path)}")
-            messagebox.showinfo("Success", gui_msg)
+            # Feedback al usuario
+            success_msg = (
+                f"Archivo actualizado:\n"
+                f"Ubicación: {self.csv_file_path}\n"
+                f"Registros: {len(existing_data)}"
+            )
+            messagebox.showinfo("Success", success_msg)
+
+        except PermissionError:
+            messagebox.showerror("Permission Denied", 
+                f"No se puede escribir en:\n{self.csv_file_path}\n"
+                "Verifique los permisos del archivo.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save CSV file: {e}")
+            messagebox.showerror("Critical Error", 
+                f"Error guardando CSV:\n{str(e)}")
 
     def get_selected_port(self):
         """Obtiene el nombre real del puerto seleccionado o None si es inválido."""
@@ -574,9 +613,14 @@ class ESPFlashTool:
 
         esptool_path = os.path.join(base_path, "esptool_py", "esptool", "esptool.py")
 
+        if getattr(sys, 'frozen', False):
+            python_exec = sys.executable  # Usa el Python embebido
+        else:
+            python_exec = "python"
+
         # Construir el comando base
         cmd = [
-            "python",
+            python_exec,
             esptool_path,
             "-p", port,
             "-b", baudrate,
@@ -611,22 +655,28 @@ class ESPFlashTool:
             
             # Configurar parámetros para ocultar la ventana en Windows
             startupinfo = None
+            creationflags = 0
             if sys.platform.startswith('win'):
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
+                creationflags = subprocess.CREATE_NO_WINDOW
+            else:  # Configuración para Linux
+                # Asegurar que esptool está en el PATH del entorno empaquetado
+                if getattr(sys, 'frozen', False):
+                    esptool_dir = os.path.join(sys._MEIPASS, "esptool")
+                    os.environ["PATH"] += os.pathsep + esptool_dir
 
-            # Ejecutar el comando
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
                 bufsize=1,
-                startupinfo=startupinfo,  # <-- Añadir este parámetro
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0  # <-- Para Windows
+                startupinfo=startupinfo,
+                creationflags=creationflags
             )
-            
+                    
             # Leer la salida línea por línea
             for line in process.stdout:
                 self.monitor_output.insert(tk.END, line)
@@ -644,7 +694,11 @@ class ESPFlashTool:
                 messagebox.showerror("Error", f"Failed to flash device. Return code: {return_code}")
                 
             self.monitor_output.see(tk.END)
-            
+
+        except subprocess.CalledProcessError as e:
+            self.monitor_output.insert(tk.END, f"\nCommand failed: {e.output}\n")
+        except FileNotFoundError as e:
+            self.monitor_output.insert(tk.END, f"\nesptool.py not found: {str(e)}\n")
         except Exception as e:
             self.monitor_output.insert(tk.END, f"\nError during flash process: {str(e)}\n")
             self.monitor_output.see(tk.END)
@@ -679,20 +733,18 @@ class ESPFlashTool:
             messagebox.showerror("Reset Error", f"Error resetting ports: {str(e)}")
             
     def reset_device(self):
-        """Realiza soft reset usando control DTR/RTS y reinicia monitorización"""
+        """Perform soft reset using DTR/RTS control and restart monitoring"""
         try:
-            # 1. Detener monitorización actual si está activa
-            if hasattr(self, 'ser') and self.ser.is_open:
-                self.ser.close()
-                time.sleep(1)  # Esperar cierre completo
-
-            # 2. Obtener puerto seleccionado
             port = self.get_selected_port()
             if not port:
-                messagebox.showerror("Error", "Selecciona un puerto")
+                messagebox.showerror("Error", "Please select a port")
                 return
 
-            # 3. Secuencia de reset (DTR/RTS)
+            # Check if port exists and is accessible
+            if not os.path.exists(port):
+                raise serial.SerialException(f"Port {port} not found")
+
+            # Reset sequence (DTR/RTS)
             with serial.Serial(port=port, baudrate=115200) as ser:
                 ser.dtr = False
                 ser.rts = True
@@ -700,15 +752,17 @@ class ESPFlashTool:
                 ser.dtr = True
                 ser.rts = False
 
-            # 4. Reiniciar monitorización automáticamente
-            self.monitor_device()  # Llama a tu función existente
-
-            # 5. Feedback en consola
-            self.monitor_output.insert(tk.END, "\nReset exitoso! Monitorización reiniciada\n")
+            self.monitor_output.insert(tk.END, "\nReset successful!\n")
             self.monitor_output.see(tk.END)
 
         except Exception as e:
-            messagebox.showerror("Error", f"Error en reset: {str(e)}")
+            error_msg = f"Reset error: {str(e)}"
+            if "Permission denied" in str(e):
+                error_msg += ("\n\nSolution:\nRun in terminal:\n"
+                            "sudo chmod 666 /dev/ttyACM0\n"
+                            "Or add your user to the 'dialout' group:\n"
+                            "sudo usermod -aG dialout $USER && newgrp dialout")
+            messagebox.showerror("Error", error_msg)
 
     def toggle_monitoring(self):
         """Update button control"""
