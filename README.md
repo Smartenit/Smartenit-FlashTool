@@ -70,21 +70,19 @@ python esp_flash_tool.py
  ```
 3. Install the modules and libreries:
    - Steps for Windows:
-   ```bash
+```bash
     pip install tk
     pip install pyserial esptool
-    ```
+ ```
    - Steps for Linux/Ubuntu/Debian:
-     ```bash
+```bash
     sudo usermod -aG dialout $USER 
     newgrp dialout
-
     sudo apt install python3-tk 
-
     python3 -m venv venv 
     source venv/bin/activate
     pip install pyserial esptool
-    ```
+ ```
 4. Run the application:
    ```bash
     python esp_flash_toolv2.py
