@@ -69,6 +69,7 @@ python esp_flash_tool.py
    cd Smartenit-FlashTool/
  ```
 3. Install the modules and libreries:
+   
    - Steps for Windows:
 ```bash
     pip install tk
