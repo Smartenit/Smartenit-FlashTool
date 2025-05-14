@@ -70,7 +70,7 @@ python esp_flash_tool.py
  ```
 3. Install the modules and libreries:
    
-   - Steps for Windows:
+- Steps for Windows:
 ```bash
     pip install tk
     pip install pyserial esptool
