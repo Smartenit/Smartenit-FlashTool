@@ -6,10 +6,12 @@ from tkinter import filedialog, messagebox, ttk, simpledialog, scrolledtext
 import serial.tools.list_ports
 import threading
 import serial
-import re
+import re, subprocess, tempfile
 import csv
 import sys
 import time
+
+sys.path.append("detools")  # Añade esta línea al inicio de tu script
 
 # Default flash parameters as specified
 DEFAULT_FLASH_PARAMS = {
@@ -23,6 +25,11 @@ DEFAULT_FLASH_PARAMS = {
     }
 }
 
+esp_delta_ota_magic = 0xfccdde10
+
+MAGIC_SIZE = 4
+DIGEST_SIZE = 32
+RESERVED_HEADER = 64 - (MAGIC_SIZE + DIGEST_SIZE)
 
 class ESPFlashTool:
     def __init__(self, root):
@@ -43,6 +50,15 @@ class ESPFlashTool:
         self.monitoring = False
         self.serial_connection = None  
         self.serial_running = False 
+
+        self.chip_var = tk.StringVar(value="esp32c6")
+
+    # Añadir estas variables
+        self.base_binary_path = tk.StringVar()
+        self.new_binary_path = tk.StringVar()
+        self.base_binary_full = ""
+        self.new_binary_full = ""
+
         # Ask the user for the CSV file path at startup
         self.set_csv_file_path()
 
@@ -140,6 +156,9 @@ class ESPFlashTool:
                 command=self.clear_files).pack(pady=2)
         ttk.Button(file_buttons_frame, text="Change CSV Path", width=18, 
                 command=self.set_csv_file_path).pack(pady=2)
+        ttk.Button(file_buttons_frame, text="Make Patch", width=18, 
+                command=self.create_patch).pack(pady=2)
+
 
         #----------------------------------------------
         # Fila 5: Botones principales (Ajuste clave)
@@ -835,6 +854,178 @@ class ESPFlashTool:
             messagebox.showerror("Error", f"Failed to open port {port}: {e}")
             self.stop_serial = True
 
+    def create_patch(self):
+        patch_window = tk.Toplevel(self.root)
+        patch_window.title("Generate OTA Patch")
+        patch_window.geometry("400x200")
+
+        # Chip Selection
+        ttk.Label(patch_window, text="Select Chip:").grid(row=0, column=0, padx=10, pady=5)
+        chip_dropdown = ttk.Combobox(
+            patch_window,
+            textvariable=self.chip_var,
+            values=["esp32", "esp32c6", "esp32s2", "esp32s3"],
+            state="readonly"
+        )
+        chip_dropdown.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+
+        # File Selection Frame
+        file_frame = ttk.Frame(patch_window)
+        file_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
+
+        # Base Binary
+        ttk.Button(
+            file_frame,
+            text="Select Base Binary",
+            command=lambda: self.select_file("base", [("Binary files", "*.bin")])
+        ).grid(row=0, column=0, padx=5, pady=5)
+        ttk.Label(file_frame, textvariable=self.base_binary_path).grid(row=0, column=1, sticky="w")
+
+        # New Binary
+        ttk.Button(
+            file_frame,
+            text="Select New Binary",
+            command=lambda: self.select_file("new", [("Binary files", "*.bin")])
+        ).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Label(file_frame, textvariable=self.new_binary_path).grid(row=1, column=1, sticky="w")
+
+        # Generate Button
+        ttk.Button(
+            patch_window,
+            text="Generate Patch",
+            command=self.generate_patch
+        ).grid(row=2, column=0, columnspan=2, pady=10)
+
+        # Grid configuration
+        patch_window.columnconfigure(1, weight=1)
+        file_frame.columnconfigure(1, weight=1)
+
+    def select_file(self, file_type, filetypes):
+        path = filedialog.askopenfilename(
+            title=f"Select {file_type.capitalize()} Binary",
+            filetypes=filetypes
+        )
+        if path:
+            path = os.path.abspath(path)  # Añade esta línea
+
+            # Validar que sea un archivo binario válido
+
+            if file_type == "base":
+                self.base_binary_path.set(os.path.basename(path))
+                self.base_binary_full = path
+            else:
+                self.new_binary_path.set(os.path.basename(path))
+                self.new_binary_full = path
+
+
+
+    def get_save_path(self):
+        """Get save path with default naming convention"""
+        base_name = os.path.splitext(os.path.basename(self.base_binary_full))[0]
+        new_name = os.path.splitext(os.path.basename(self.new_binary_full))[0]
+        default_name = f"patch_{base_name}_to_{new_name}.bin"
+        
+        return filedialog.asksaveasfilename(
+            title="Save Patch File",
+            initialfile=default_name,
+            filetypes=[("Binary Patch", "*.bin"), ("All Files", "*.*")],
+            defaultextension=".bin"
+        )
+
+    def generate_patch(self):
+
+        save_path = self.get_save_path()
+        if not save_path:
+            return
+
+
+        if getattr(sys, 'frozen', False):
+            # Si la aplicación está empaquetada con PyInstaller
+            base_path = sys._MEIPASS
+        else:
+            # Si la aplicación se ejecuta desde el código fuente
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
+        esptool_path = os.path.join(base_path, "esptool_py", "esptool", "esptool.py")
+
+        if getattr(sys, 'frozen', False):
+            python_exec = sys.executable  # Usa el Python embebido
+        else:
+            python_exec = "python"
+
+
+        # Step 1: Get validation hash using esptool
+        try:
+            esptool_cmd = [
+                python_exec,
+                esptool_path,
+                "--chip", self.chip_var.get().lower(),
+                "image_info",
+                self.base_binary_full
+            ]
+            result = subprocess.run(
+                esptool_cmd,
+                check=True,
+                capture_output=True,
+                timeout=30
+            )
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Error", f"esptool failed: {e.stderr.decode()}")
+            return
+        except FileNotFoundError:
+            messagebox.showerror("Error", "esptool.py not found in PATH")
+            return
+
+        # Extract validation hash
+        hash_match = re.search(rb"Validation Hash: ([A-Fa-f0-9]+) \(valid\)", result.stdout)
+
+        if not hash_match:
+            messagebox.showerror("Error", "Validation hash not found")
+            return
+        digest = bytes.fromhex(hash_match.group(1).decode())
+
+            # Step 2: Generate temporary patch
+        try:
+            # Usar el mismo enfoque que el script original
+            temp_patch_path = "patch_file_temp.bin"
+            
+                # Comando detools
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m", "detools",
+                    "create_patch",
+                    "-c", "heatshrink",
+                    self.base_binary_full,
+                    self.new_binary_full,
+                    temp_patch_path
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Step 3: Create final file with header
+            with open(temp_patch_path, "rb") as src_file, open(save_path, "wb") as dest_file:
+                # Write custom header
+                dest_file.write(self.ESP_DELTA_OTA_MAGIC.to_bytes(self.MAGIC_SIZE, 'little'))
+                dest_file.write(digest)
+                dest_file.write(b"\x00" * self.RESERVED_HEADER)
+                # Copy patch data
+                shutil.copyfileobj(src_file, dest_file)
+
+            messagebox.showinfo("Success", f"Patch generated successfully:\n{save_path}")
+
+        except subprocess.CalledProcessError as e:
+            tool_name = 'esptool' if 'esptool' in str(e.cmd) else 'detools'
+            error_msg = f"{tool_name} error:\n"
+            error_msg += e.stderr.decode() if e.stderr else "Unknown error"
+            messagebox.showerror("Process Error", error_msg)
+        except Exception as e:
+            messagebox.showerror("Unexpected Error", str(e))
+        finally:
+            if os.path.exists(temp_patch_path):
+                os.remove(temp_patch_path)
 
     def stop_monitoring(self):
         """Safe shutdown procedure"""
