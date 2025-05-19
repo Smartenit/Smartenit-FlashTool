@@ -10,8 +10,10 @@ import re, subprocess, tempfile
 import csv
 import sys
 import time
+import detools, shutil 
 
-sys.path.append("detools")  # Añade esta línea al inicio de tu script
+
+
 
 # Default flash parameters as specified
 DEFAULT_FLASH_PARAMS = {
@@ -24,12 +26,6 @@ DEFAULT_FLASH_PARAMS = {
         "flash_freq": "80m"
     }
 }
-
-esp_delta_ota_magic = 0xfccdde10
-
-MAGIC_SIZE = 4
-DIGEST_SIZE = 32
-RESERVED_HEADER = 64 - (MAGIC_SIZE + DIGEST_SIZE)
 
 class ESPFlashTool:
     def __init__(self, root):
@@ -50,6 +46,10 @@ class ESPFlashTool:
         self.monitoring = False
         self.serial_connection = None  
         self.serial_running = False 
+        self.ESP_DELTA_OTA_MAGIC = 0xfccdde10  # <--- ¡Mayúsculas!
+        self.MAGIC_SIZE = 4
+        self.DIGEST_SIZE = 32
+        self.RESERVED_HEADER = 64 - (self.MAGIC_SIZE + self.DIGEST_SIZE)
 
         self.chip_var = tk.StringVar(value="esp32c6")
 
