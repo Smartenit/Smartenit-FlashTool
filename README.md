@@ -73,7 +73,7 @@ python esp_flash_tool.py
 - Steps for Windows:
 ```bash
     pip install tk
-    pip install pyserial esptool
+    pip install pyserial esptool detools
  ```
    - Steps for Linux/Ubuntu/Debian:
 ```bash
@@ -82,7 +82,7 @@ python esp_flash_tool.py
     sudo apt install python3-tk 
     python3 -m venv venv 
     source venv/bin/activate
-    pip install pyserial esptool
+    pip install pyserial esptool detools
  ```
 4. Run the application:
    ```bash
